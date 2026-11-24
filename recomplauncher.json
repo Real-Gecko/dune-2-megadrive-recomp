@@ -1,0 +1,18 @@
+{
+  "$schema": "https://recomplauncher.com/schema/recomplauncher.json",
+  "format": 1,
+  "name": "Dune - The Battle for Arrakis",
+  "inputs": [
+    {
+      "id": "game",
+      "label": "Your Mega Drive ROM of Dune - The Battle for Arrakis (USA).",
+      "formats": [{ "type": "file", "extensions": ["md", "gen", "bin"] }],
+      "dumps": [{ "name": "USA", "size": 1048576, "crc32": "4dea40ba" }]
+    }
+  ],
+  "start": {
+    "program": ["dune2.exe", "dune2"],
+    "args": ["--rom", "{input:game}"]
+  },
+  "saves": ["{install}/saves.txt"]
+}
