@@ -742,9 +742,18 @@ uint16_t MentatChoice(uint16_t proceed) {
     for (;;) {
         WaitVBlank();
         uint32_t b = ReadPads();
-        if (b & 0x70) break;
+        // Port: the mouse points at a choice (rows at y 0xA8 and 0xC0, x
+        // 0xC1-0x110), moving the mark there; a click picks the one under
+        // it, elsewhere nothing.
+        const host::Mouse& m = host::mouse();
+        int row = !m.inside || m.x < 0xC1 || m.x > 0x110 || m.y < 0xA4 || m.y >= 0xD4 ? -1 : m.y >= 0xBC;
+        bool click = (b & 0x40) && (host::mouse_pad() & 0x40);
+        if (click && row < 0) continue;
+        bool point = row >= 0 && (m.active || click) && sel != (row ? 0x140 : 0x128);
+        if ((b & 0x70) && !point) break;
         int16_t d;
-        if ((b & 1) && sel != 0x128) d = -2;
+        if (point) d = row ? 2 : -2;
+        else if ((b & 1) && sel != 0x128) d = -2;
         else if ((b & 2) && sel != 0x140) d = 2;
         else continue;
         for (int i = 0; i < 12; i++) {
@@ -754,6 +763,7 @@ uint16_t MentatChoice(uint16_t proceed) {
             WaitVBlank();
         }
         PlaySfx(0x19);
+        if (click) break;
     }
     PlaySfx(0x28);
     uint16_t choice = sel == 0x128 ? 0 : 1;
@@ -940,14 +950,32 @@ void Briefing(uint16_t house, uint16_t scenario) {
     MentatStart(uint16_t(scenario - 1), rd32(texts - 16), 1);
     SetPadRepeatMask(0xF0);
     while (MentatChoice(1) == 1) MentatContinue(uint16_t(scenario - 1), rd32(texts - 4), 1);
-    StartSeq29();
-    PlaySoundEffect(0x26);
-    WaitFrames(60);
-    PlayMusicTrack(0x1D);
-    StopSeq29();
-    WaitFrames(100);
-    MentatSlideAway();
-    MentatOutro(uint16_t(scenario - 1));
+    // Port: a key, mouse or pad button press skips the outro; its end state
+    // (sequences stopped, the game's display, the DMA queue empty) is set
+    // straight away.
+    uint8_t saved_mask = pad_repeat_mask;
+    uint16_t saved_delay = fade_delay;
+    host::begin_skippable(true);
+    try {
+        StartSeq29();
+        PlaySoundEffect(0x26);
+        WaitFrames(60);
+        PlayMusicTrack(0x1D);
+        StopSeq29();
+        WaitFrames(100);
+        MentatSlideAway();
+        MentatOutro(uint16_t(scenario - 1));
+    } catch (const host::Skip&) {
+        StopSeq29();
+        GemsStopSeq(7);
+        dma_read = dma_write;
+        vblank_hook = 0;
+        md::int_mask = 0;
+        RestoreDisplay();
+        pad_repeat_mask = saved_mask;
+        fade_delay = saved_delay;
+    }
+    host::begin_skippable(false);
 }
 
 // 0x1F516, 0x1F5A4: the mentat's word on a won or lost scenario (0 up),

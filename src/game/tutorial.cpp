@@ -128,12 +128,13 @@ void HideCaption() {
     }
 }
 
-// 0x418AC: waits n frames; -1 if Start is pressed, 0 at once for A, B or C.
+// 0x418AC: waits n frames; -1 if Start (port: or Esc) is pressed, 0 at
+// once for A, B or C.
 uint32_t WaitOrSkip(uint16_t n) {
     uint16_t i = uint16_t(n - 1);
     do {
         uint32_t p = ReadPads();
-        if (p & 0x80) return 0xFFFFFFFF;
+        if ((p & 0x80) || host::take_escape()) return 0xFFFFFFFF;
         if (p & 0x70) return 0;
         WaitVBlank();
     } while (i-- != 0);

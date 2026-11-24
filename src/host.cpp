@@ -7,6 +7,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -23,9 +24,24 @@ static SDL_Window* window = nullptr;
 static SDL_Renderer* renderer = nullptr;
 static SDL_Texture* texture = nullptr;
 static SDL_Gamepad* gamepad = nullptr;
-static uint32_t pixels[320 * 224];
+static constexpr int kPitch = kWideW;
+static uint32_t pixels[kWideW * kWideH];
+static Screen shown;
+static bool (*wide_renderer)(uint32_t*, int) = nullptr;
 static uint64_t next_tick = 0;
 static uint8_t plan_held = 0;
+static uint8_t plan_mods = 0; // bit 0 Shift
+static Mouse mouse_state;
+static int digit_key = -1;
+static uint32_t digit_frame = 0;
+static void (*overlay)(uint32_t*, int) = nullptr;
+static bool skippable = false;
+static bool real_press = false, pointer_hidden = false;
+static uint32_t esc_frame = 0, space_frame = 0, battle_frame = 0;
+static bool esc_down = false, space_down = false;
+static int wheel = 0;
+static int present_x = 0, present_y = 0, present_k = 1; // the frame's place in the window's logical size
+static std::string typed;
 
 enum : uint8_t { UP = 1, DOWN = 2, LEFT = 4, RIGHT = 8, B = 16, C = 32, A = 64, START = 128 };
 
@@ -49,9 +65,16 @@ static void quit() {
     std::exit(0);
 }
 
+void fatal(const char* msg) {
+    std::fprintf(stderr, "%s\n", msg);
+    if (!opt.headless) SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Dune - The Battle for Arrakis", msg, window);
+    audio::shutdown();
+    SDL_Quit();
+    std::exit(2);
+}
+
 static void save_snap(const std::string& path) {
-    int w = display::cfg.width;
-    if (SDL_Surface* s = SDL_CreateSurfaceFrom(w, 224, SDL_PIXELFORMAT_XRGB8888, pixels, 320 * 4)) {
+    if (SDL_Surface* s = SDL_CreateSurfaceFrom(shown.w, shown.h, SDL_PIXELFORMAT_XRGB8888, pixels, kPitch * 4)) {
         SDL_SavePNG(s, path.c_str());
         SDL_DestroySurface(s);
     }
@@ -73,6 +96,27 @@ static void run_plan() {
         } else if (s.cmd == "w16") {
             unsigned a, v;
             if (std::sscanf(s.arg.c_str(), "%x %x", &a, &v) == 2) md::wr16(a, uint16_t(v));
+        } else if (s.cmd == "mouse") {
+            std::sscanf(s.arg.c_str(), "%d %d", &mouse_state.x, &mouse_state.y);
+            mouse_state.active = mouse_state.inside = true;
+        } else if (s.cmd == "mdown") mouse_state.buttons |= uint8_t(std::atoi(s.arg.c_str()));
+        else if (s.cmd == "mup") mouse_state.buttons &= uint8_t(~std::atoi(s.arg.c_str()));
+        else if (s.cmd == "mods") plan_mods = uint8_t(std::atoi(s.arg.c_str()));
+        else if (s.cmd == "digit") {
+            digit_key = int(std::strtol(s.arg.c_str(), nullptr, 16));
+            digit_frame = frame_count;
+        } else if (s.cmd == "esc") {
+            esc_down = true;
+            esc_frame = frame_count;
+        } else if (s.cmd == "space") {
+            space_down = true;
+            space_frame = frame_count;
+        } else if (s.cmd == "wheel") {
+            wheel += std::atoi(s.arg.c_str());
+        } else if (s.cmd == "anykey") {
+            real_press = true;
+        } else if (s.cmd == "char") {
+            typed += s.arg == "BS" ? std::string("\b") : s.arg;
         } else if (s.cmd == "exit") quit();
     }
 }
@@ -99,15 +143,14 @@ static std::string ask_rom_path() {
 }
 
 // The game data from data/ beside the executable; on the first run it is
-// extracted from the ROM dump (--rom, or asked for).
+// extracted from the ROM dump asked for.
 static bool load_data() {
     std::string dir = std::string(SDL_GetBasePath()) + "data/";
     std::string err;
     if (assets::load(dir, &err)) return true;
-    std::string rom = opt.rom;
-    if (rom.empty() && !opt.headless) rom = ask_rom_path();
+    std::string rom = !opt.rom.empty() ? opt.rom : opt.headless ? std::string() : ask_rom_path();
     if (rom.empty()) {
-        std::fprintf(stderr, "%s\nNo ROM dump given (--rom PATH).\n", err.c_str());
+        std::fprintf(stderr, "%s\nNo ROM dump given.\n", err.c_str());
         return false;
     }
     if (assets::extract(rom, dir, &err) && assets::load(dir, &err)) return true;
@@ -135,36 +178,38 @@ bool init(const Options& o) {
         return false;
     }
     if (!opt.headless) {
-        if (!SDL_CreateWindowAndRenderer("Dune - The Battle for Arrakis", 320 * opt.scale, 224 * opt.scale,
-                                         SDL_WINDOW_RESIZABLE, &window, &renderer)) {
+        if (!SDL_CreateWindowAndRenderer("Dune - The Battle for Arrakis", kWideW * 2, kWideH * 2,
+                                         SDL_WINDOW_RESIZABLE | SDL_WINDOW_FULLSCREEN, &window, &renderer)) {
             std::fprintf(stderr, "window: %s\n", SDL_GetError());
             return false;
         }
-        SDL_SetRenderVSync(renderer, 0);
-        texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING, 320, 224);
+        SDL_SetRenderVSync(renderer, 1);
+        texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING, kWideW, kWideH);
         SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
     }
     audio::init(!opt.headless, opt.headless ? opt.wav : std::string());
     display::reset();
     if (!load_data()) return false;
+    if (!opt.headless && opt.saves.empty()) opt.saves = std::string(SDL_GetBasePath()) + "saves.txt";
     next_tick = SDL_GetTicksNS();
     return true;
 }
 
 void set_vblank_handler(void (*handler)()) { vblank_handler = handler; }
 
-// Keyboard: WASD the d-pad, numpad 1/2/3 A/B/C, Space or Enter Start.
+static bool in_battle() { return frame_count - battle_frame <= 2; }
+
+// Keyboard: the arrows the d-pad, Enter A, Shift C in battle (the faster
+// scroll). Esc is taken by the screens that close with it (take_escape).
 static uint8_t key_buttons() {
     const bool* k = SDL_GetKeyboardState(nullptr);
     uint8_t b = 0;
-    if (k[SDL_SCANCODE_W]) b |= UP;
-    if (k[SDL_SCANCODE_S]) b |= DOWN;
-    if (k[SDL_SCANCODE_A]) b |= LEFT;
-    if (k[SDL_SCANCODE_D]) b |= RIGHT;
-    if (k[SDL_SCANCODE_SPACE] || k[SDL_SCANCODE_RETURN]) b |= START;
-    if (k[SDL_SCANCODE_KP_1]) b |= A;
-    if (k[SDL_SCANCODE_KP_2]) b |= B;
-    if (k[SDL_SCANCODE_KP_3]) b |= C;
+    if (k[SDL_SCANCODE_UP]) b |= UP;
+    if (k[SDL_SCANCODE_DOWN]) b |= DOWN;
+    if (k[SDL_SCANCODE_LEFT]) b |= LEFT;
+    if (k[SDL_SCANCODE_RIGHT]) b |= RIGHT;
+    if (k[SDL_SCANCODE_RETURN]) b |= A;
+    if (in_battle() && (k[SDL_SCANCODE_LSHIFT] || k[SDL_SCANCODE_RSHIFT])) b |= C;
     return b;
 }
 
@@ -185,14 +230,121 @@ static uint8_t pad_buttons() {
     return b;
 }
 
+static uint8_t mouse_buttons() {
+    return uint8_t((mouse_state.buttons & 1 ? A : 0) | (mouse_state.buttons & 2 ? B : 0));
+}
+
 uint8_t pad() {
-    if (opt.headless) return plan_held;
-    return uint8_t(plan_held | key_buttons() | pad_buttons());
+    if (opt.headless) return uint8_t(plan_held | mouse_buttons());
+    uint8_t b = uint8_t(plan_held | key_buttons() | pad_buttons());
+    if (b & 0xF) mouse_state.active = false;
+    return uint8_t(b | mouse_buttons());
+}
+
+const Mouse& mouse() { return mouse_state; }
+
+uint8_t mouse_pad() {
+    if (opt.headless) return uint8_t(mouse_buttons() & ~plan_held);
+    return uint8_t(mouse_buttons() & ~(plan_held | key_buttons() | pad_buttons()));
+}
+
+bool shift_held() { return (plan_mods & 1) || (!opt.headless && (SDL_GetModState() & SDL_KMOD_SHIFT)); }
+
+int take_digit() {
+    int d = frame_count - digit_frame <= 1 ? digit_key : -1;
+    digit_key = -1;
+    return d;
+}
+
+void begin_skippable(bool on) {
+    skippable = on;
+    real_press = false;
+}
+
+const Screen& screen() { return shown; }
+
+void set_wide_renderer(bool (*draw)(uint32_t*, int)) { wide_renderer = draw; }
+
+bool press_pending() { return real_press; }
+
+bool take_escape() {
+    bool e = esc_down && frame_count - esc_frame <= 1;
+    esc_down = false;
+    return e;
+}
+
+bool take_space() {
+    bool s = space_down && frame_count - space_frame <= 1;
+    space_down = false;
+    return s;
+}
+
+int take_wheel() {
+    int w = wheel;
+    wheel = 0;
+    return w;
+}
+
+void mark_battle() { battle_frame = frame_count; }
+void clear_press() { real_press = false; }
+
+int take_char() {
+    if (typed.empty()) return 0;
+    int c = typed[0];
+    typed.erase(0, 1);
+    return c;
+}
+void clear_chars() { typed.clear(); }
+
+void set_overlay(void (*draw)(uint32_t*, int)) { overlay = draw; }
+
+static void present() {
+    // With the wide battle view the window keeps its size: other screens
+    // are shown twice as large in its middle.
+    int lw = shown.w, lh = shown.h;
+    present_k = 1;
+    if (opt.wide && shown.w < kWideW) {
+        lw = kWideW;
+        lh = kWideH;
+        present_k = 2;
+    }
+    present_x = (lw - shown.w * present_k) / 2;
+    present_y = (lh - shown.h * present_k) / 2;
+    SDL_UpdateTexture(texture, nullptr, pixels, kPitch * 4);
+    SDL_SetRenderLogicalPresentation(renderer, lw, lh, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+    SDL_RenderClear(renderer);
+    SDL_FRect src{0, 0, float(shown.w), float(shown.h)};
+    SDL_FRect dst{float(present_x), float(present_y), float(shown.w * present_k), float(shown.h * present_k)};
+    SDL_RenderTexture(renderer, texture, &src, &dst);
+    SDL_RenderPresent(renderer);
+}
+
+// The game and its sound stand still while the window is not focused.
+static void wait_for_focus() {
+    audio::pause(true);
+    mouse_state.buttons = 0;
+    SDL_Event e;
+    while (SDL_WaitEvent(&e) && e.type != SDL_EVENT_WINDOW_FOCUS_GAINED) {
+        if (e.type == SDL_EVENT_QUIT) quit();
+        if (e.type == SDL_EVENT_WINDOW_EXPOSED) present();
+    }
+    audio::pause(false);
+    next_tick = SDL_GetTicksNS();
 }
 
 void frame() {
     if (vblank_handler && md::int_mask < 6) vblank_handler();
-    display::compose(pixels, 320);
+    if (skippable && real_press) {
+        skippable = false;
+        throw Skip{};
+    }
+    if (opt.wide && wide_renderer && wide_renderer(pixels, kPitch)) {
+        shown = {kWideW, kWideH, (kWideW - 320) / 2, (kWideH - 224) / 2};
+    } else {
+        display::compose(pixels, kPitch);
+        shown = {display::cfg.width, 224, 0, 0};
+    }
+    if (overlay) overlay(pixels, kPitch);
     run_plan();
     frame_count++;
     if (opt.headless) {
@@ -202,22 +354,61 @@ void frame() {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_EVENT_QUIT) quit();
-        if (e.type == SDL_EVENT_KEY_DOWN && e.key.key == SDLK_ESCAPE) quit();
+        if (e.type == SDL_EVENT_WINDOW_FOCUS_LOST) wait_for_focus();
         if (e.type == SDL_EVENT_KEY_DOWN && e.key.key == SDLK_RETURN && (e.key.mod & SDL_KMOD_ALT) && !e.key.repeat)
             SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
+        if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat && e.key.scancode >= SDL_SCANCODE_1 &&
+            e.key.scancode <= SDL_SCANCODE_0) {
+            digit_key = (e.key.scancode - SDL_SCANCODE_1 + 1) % 10 | (e.key.mod & SDL_KMOD_CTRL ? 0x100 : 0) |
+                        (e.key.mod & SDL_KMOD_SHIFT ? 0x200 : 0);
+            digit_frame = frame_count;
+        }
+        if (e.type == SDL_EVENT_MOUSE_MOTION || e.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
+            e.type == SDL_EVENT_MOUSE_BUTTON_UP) {
+            SDL_ConvertEventToRenderCoordinates(renderer, &e);
+            float x = e.type == SDL_EVENT_MOUSE_MOTION ? e.motion.x : e.button.x;
+            float y = e.type == SDL_EVENT_MOUSE_MOTION ? e.motion.y : e.button.y;
+            mouse_state.x = std::clamp((int(x) - present_x) / present_k, 0, shown.w - 1);
+            mouse_state.y = std::clamp((int(y) - present_y) / present_k, 0, shown.h - 1);
+            mouse_state.active = true;
+            mouse_state.inside = true;
+        }
+        if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN || e.type == SDL_EVENT_MOUSE_BUTTON_UP) {
+            uint8_t bit = e.button.button == SDL_BUTTON_LEFT ? 1 : e.button.button == SDL_BUTTON_RIGHT ? 2 : 0;
+            if (e.button.down) mouse_state.buttons |= bit;
+            else mouse_state.buttons &= uint8_t(~bit);
+        }
+        if (e.type == SDL_EVENT_MOUSE_WHEEL) wheel -= e.wheel.integer_y;
+        if (e.type == SDL_EVENT_WINDOW_MOUSE_LEAVE) mouse_state.inside = false;
+        if ((e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat) || e.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
+            e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN)
+            real_press = true;
+        if (e.type == SDL_EVENT_KEY_DOWN && e.key.key == SDLK_ESCAPE && !e.key.repeat) {
+            esc_down = true;
+            esc_frame = frame_count;
+        }
+        if (e.type == SDL_EVENT_KEY_DOWN && e.key.key == SDLK_SPACE && !e.key.repeat) {
+            space_down = true;
+            space_frame = frame_count;
+        }
+        if (e.type == SDL_EVENT_KEY_DOWN && typed.size() < 16) {
+            if (e.key.key >= SDLK_A && e.key.key <= SDLK_Z && !(e.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT)))
+                typed += char('A' + (e.key.key - SDLK_A));
+            else if (e.key.key == SDLK_BACKSPACE)
+                typed += '\b';
+        }
         if (e.type == SDL_EVENT_GAMEPAD_ADDED && !gamepad) gamepad = SDL_OpenGamepad(e.gdevice.which);
         if (e.type == SDL_EVENT_GAMEPAD_REMOVED && gamepad && SDL_GetGamepadID(gamepad) == e.gdevice.which) {
             SDL_CloseGamepad(gamepad);
             gamepad = nullptr;
         }
     }
-    int w = display::cfg.width;
-    SDL_UpdateTexture(texture, nullptr, pixels, 320 * 4);
-    SDL_SetRenderLogicalPresentation(renderer, w, 224, SDL_LOGICAL_PRESENTATION_LETTERBOX);
-    SDL_RenderClear(renderer);
-    SDL_FRect src{0, 0, float(w), 224};
-    SDL_RenderTexture(renderer, texture, &src, nullptr);
-    SDL_RenderPresent(renderer);
+    if (bool hide = in_battle(); hide != pointer_hidden) {
+        pointer_hidden = hide;
+        if (hide) SDL_HideCursor();
+        else SDL_ShowCursor();
+    }
+    present();
     const uint64_t period = 1000000000ull / 60;
     next_tick += period;
     uint64_t now = SDL_GetTicksNS();

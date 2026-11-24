@@ -23,7 +23,7 @@ uint16_t Smooth(uint32_t rec, PathCostFn cost, int16_t limit) {
     wr8(buf + uint32_t(int32_t(int16_t(rd16(rec + 4)))), 0xFF);
     uint16_t cell = rd16(rec);
     if (int16_t(rd16(rec + 4)) > 1) {
-        uint32_t a = buf;
+        uint32_t a = buf + 1;
         while (rd8(a) != 0xFF) {
             uint32_t b = a;
             do b--;

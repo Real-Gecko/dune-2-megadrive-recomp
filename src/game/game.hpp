@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <initializer_list>
+#include <vector>
 
 namespace game {
 
@@ -536,6 +537,23 @@ void AttractDemo(uint32_t);
 void UpdateHouse(uint16_t house, uint16_t a);
 void SetCursorAt(uint16_t cell);
 
+// --- Port additions: mouse and multiple selection (select.cpp) ---
+uint16_t PlayerInput();
+void PollMouse(bool placement);
+void ResetSelection();
+void LeaveGroups(uint32_t u);
+void LeaveGroupsForRepair(uint32_t u);
+void NoteEvent(uint32_t pos);
+void DrawSelection(uint32_t* pixels, int pitch);
+// (saves.cpp)
+struct Save {
+    uint16_t house, scenario; // scenario 1-9
+};
+std::vector<Save> ReadSaves();
+void SaveMission(uint16_t house, uint16_t scenario);
+// (wideview.cpp)
+bool DrawWide(uint32_t* pixels, int pitch);
+void NarrowViewLimits();
 // --- Front end (frontend.cpp) ---
 void FrontEnd();
 

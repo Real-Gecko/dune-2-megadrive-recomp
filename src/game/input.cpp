@@ -32,10 +32,11 @@ uint16_t SnapToUnit(uint16_t cell) {
 }
 
 // 0x4C8C: input (unless frozen: 0xFFBE9C), the button edges latched
-// into 0xFFBF2B, then the player's unit tick.
+// into 0xFFBF2B, then the player's unit tick. The port's PlayerInput
+// (select.cpp) wraps HandleInput.
 void UpdateWorld(uint32_t) {
     if (!rd8(0xFFBE9C)) {
-        HandleInput();
+        PlayerInput();
         wr8(0xFFBF2B, rd8(0xFFBF2A));
         wr8(0xFFBF2A, 0);
     }

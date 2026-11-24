@@ -117,6 +117,22 @@ uint16_t OptionsKey(uint16_t key, uint16_t ingame) {
     return item;
 }
 
+// Port: the cursor's y on a row.
+int16_t RowY(uint16_t row) {
+    int16_t y = 0x24;
+    for (uint16_t i = 0; i < row; i++) y = int16_t(y + rd16(kSteps + i * 2u));
+    return y;
+}
+
+// Port: the row under the mouse (16 pixels from the cursor's y), else -1.
+int OptionsMouseRow(uint16_t ingame) {
+    const host::Mouse& m = host::mouse();
+    if (!m.inside || m.x < 8 || m.x >= 312) return -1;
+    for (uint16_t row = 0; row <= (ingame ? 7 : 5); row++)
+        if (m.y >= RowY(row) && m.y < RowY(row) + 16) return row;
+    return -1;
+}
+
 // 0x2208E: colours first..last of a palette line rotated down one, in CRAM.
 void CycleColors(uint16_t line, uint16_t first, uint16_t last) {
     int i = line * 16 + first;
@@ -222,7 +238,19 @@ bool Confirm() {
     DrawText(0x21A4E, 0x8D00, 0);
     ShowConfirm();
     while (!done) {
-        uint16_t k = ConfirmKey(GetKey());
+        uint16_t key = GetKey();
+        // Port: the mouse points at YES (x 100-151) or NO (152-207); a
+        // click elsewhere does nothing.
+        const host::Mouse& m = host::mouse();
+        bool click = key == 'A' && (host::mouse_pad() & 0x40);
+        int at = !m.inside || m.y < 0x7F || m.y >= 0x93 || m.x < 100 || m.x >= 208 ? -1 : m.x >= 152;
+        if (at >= 0 && !slide_x && (m.active || click) && cursor_x != (at ? 0xB4 : 0x70)) {
+            cursor_x = at ? 0xB4 : 0x70;
+            PlaySfx(0x19);
+        }
+        if (click && at < 0) key = 0;
+        uint16_t k = ConfirmKey(key);
+        if (host::take_escape()) k = 'B'; // port: Esc answers no
         if (k == 'A') yes = done = true;
         else if (k == 'B') {
             yes = false;
@@ -419,6 +447,16 @@ uint16_t OptionsScreen(uint16_t ingame) {
     SetPadRepeatMask(0xFF);
     do {
         key = GetKey();
+        if (host::take_escape()) key = 'S'; // port: Esc closes it too
+        // Port: the mouse points at a row; a click acts on the row under
+        // it, elsewhere it does nothing.
+        bool mouse_click = key == 'A' && (host::mouse_pad() & 0x40);
+        int mouse_row = OptionsMouseRow(ingame);
+        if (mouse_row >= 0 && !slide_y && (host::mouse().active || mouse_click)) {
+            item = uint16_t(mouse_row);
+            cursor_y = RowY(item);
+        }
+        if (mouse_click && mouse_row < 0) key = 0;
         uint16_t row = OptionsKey(key, ingame);
         if (row != 0xFFFF && row != at_row) {
             click(0x19);
@@ -566,13 +604,20 @@ uint16_t PasswordScreen() {
     PasswordFrame();
     FadeIn(LoadScreen(10));
     SetPadRepeatMask(0xF0);
+    // Port: letters and Backspace typed on the keyboard enter as if picked
+    // from the grid; Esc leaves.
+    host::clear_chars();
     while (!done) {
         uint16_t key = GetKey();
+        if (host::take_escape()) key = 'S';
+        int typed = host::take_char();
+        if (typed) key = 'T';
         switch (key) {
+        case 'T':
         case 'A':
         case 'B':
         case 'C': {
-            uint8_t c = CharAtCursor();
+            uint8_t c = key == 'T' ? uint8_t(typed == '\b' ? '<' : typed) : CharAtCursor();
             if (!c) break;
             if (c == '!') {
                 if (CheckPassword(buf)) {

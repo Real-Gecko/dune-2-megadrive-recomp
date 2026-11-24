@@ -2,6 +2,8 @@
 // random numbers, pads, hardware init and VBlank.
 #include "game.hpp"
 
+#include "../assets.hpp"
+
 #include <cstring>
 
 namespace game {
@@ -255,8 +257,13 @@ void BlitMap(uint32_t src, uint16_t nt, uint32_t pos, uint32_t size) {
     }
 }
 
-// 0xC32: Westwood LCW decompression from src to dest.
+// 0xC32: Westwood LCW decompression from src to dest (the data files hold
+// the ROM's packed data unpacked).
 uint16_t Decompress(uint32_t src, uint32_t dest) {
+    if (const std::vector<uint8_t>* u = assets::unpacked(src)) {
+        for (uint8_t b : *u) wr8(dest++, b);
+        return uint16_t(u->size());
+    }
     uint32_t start = dest;
     auto copy = [&](uint32_t from, uint16_t n) {
         do wr8(dest++, rd8(from++));
@@ -435,6 +442,7 @@ void BootLogo() {
     for (int pass = 0; pass < 3; pass++)
         for (int16_t off = 0x28;; off = int16_t(off - 2)) {
             WaitFrames(3);
+            if (host::press_pending()) return; // port: skips to the title menu
             if (off < 0) break;
             for (int i = 0; i < 11; i++) wr16(kPalette + 4 + i * 2u, rd16(0x18D6 + off + i * 2u));
             UploadPalette(kPalette);

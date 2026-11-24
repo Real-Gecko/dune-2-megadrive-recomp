@@ -7,6 +7,8 @@
 // fractions of x and y, 0xFFBF40 the cursor speed.
 #include "game.hpp"
 
+#include <algorithm>
+
 namespace game {
 
 namespace {
@@ -130,12 +132,70 @@ void Follow(U16 pos, U16 frac, U16 delta, U16 view, int16_t lo, int16_t hi, U16 
     }
 }
 
+// Port: the mouse moves the cursor (a placement shape of 2w x 2h pixels
+// centred on it, on whole cells), anywhere on the frame shown (in the wide
+// battle view outside the game's own screen too); at the edges the view scrolls,
+// faster with C (Shift) held. The pad's buttons latch as usual. Returns
+// true: the view was scrolled directly.
+bool MouseCursor(uint16_t pad, int16_t w, int16_t h, bool placement) {
+    const host::Mouse& m = host::mouse();
+    const host::Screen& s = host::screen();
+    bool wide = s.ox || s.oy;
+    int gx = m.x - s.ox, gy = m.y - s.oy;
+    int16_t speed = (pad & 0x20) ? 0xE : 8;
+    auto edge = [&](int p, int size) { return int16_t(!m.inside ? 0 : p < 4 ? -speed : p >= size - 4 ? speed : 0); };
+    auto scroll = [](U16 delta, U16 view, int16_t step, U16 vmin, U16 vmax) {
+        int16_t v = int16_t(view + step);
+        if (v < int16_t(vmin)) v = int16_t(vmin);
+        if (v >= int16_t(vmax)) v = int16_t(vmax - 1);
+        delta = uint16_t(v - int16_t(view));
+        return v;
+    };
+    int16_t vx = scroll(scroll_dx, view_x, edge(m.x, s.w), U16{0xFFE3D2}, U16{0xFFE3D4});
+    int16_t vy = scroll(scroll_dy, view_y, edge(m.y, s.h), U16{0xFFE3CE}, U16{0xFFE3D0});
+    if (placement) {
+        auto axis = [](int p, int16_t v, int16_t size, int lo, int hi) {
+            int c = (p + v - size + 0x10) & ~0x1F;
+            if (c < lo + v) c += 0x20;
+            if (c > hi + v) c -= 0x20;
+            return uint16_t(c - v);
+        };
+        cur_x = axis(gx, vx, w, wide ? -s.ox : S16{kCursor + 8}, s.w - s.ox - 1 - 2 * w);
+        cur_y = axis(gy, vy, h, wide ? -s.oy : S16{kCursor + 0xA}, s.h - s.oy - 1 - 2 * h);
+        U16{0xFFC240} = uint16_t((((vx + S16{kCursor} + 0x10) >> 5) & 0x3F) | (((vy + S16{kCursor + 2} + 0x10) & 0x7E0) << 1));
+    } else {
+        if (wide) {
+            cur_x = uint16_t(gx);
+            cur_y = uint16_t(gy);
+        } else {
+            cur_x = uint16_t(std::clamp(gx, int(S16{kCursor + 8}), int(S16{kCursor + 0xC})));
+            cur_y = uint16_t(std::clamp(gy, int(S16{kCursor + 0xA}), int(S16{kCursor + 0xE})));
+        }
+        int wx = S16{kCursor} + S16{0xFFE3EC}, wy = S16{kCursor + 2} + S16{0xFFE3EE};
+        U16{0xFFC240} = uint16_t(((wx >> 5) & 0x3F) | ((wy & 0x7E0) << 1));
+    }
+    if (pad & 0x80) {
+        wr8(kCursor + 0x18, 'S');
+        U16{0xFFC02C} = 1;
+    } else if (pad & 0x40) {
+        wr8(kCursor + 0x18, 'A');
+        U16{0xFFC02C} = 1;
+    } else if (pad & 0x10) {
+        wr8(kCursor + 0x18, 'B');
+        U16{0xFFC02C} = 1;
+    } else if ((pad & 0x20) && !rd8(kCursor + 0x18)) { // Shift held must not replace a click's 'A'
+        wr8(kCursor + 0x18, 'C');
+    }
+    return true;
+}
+
 // The cursor moves by the pad (accelerating to 3 pixels a frame); with C
 // held the view scrolls instead. A, B and Start latch their key.
 // Returns true when the view was scrolled directly.
 bool MoveCursor() {
     U8{0xFFE41E} &= 0xDF;
-    uint16_t pad = uint16_t(ReadPads());
+    uint16_t pad = uint16_t(ReadPads() & ~host::mouse_pad());
+    if (host::mouse().active && !(pad & 0xF)) return MouseCursor(pad, 0, 0, false);
     int32_t dx = 0, dy = 0;
     int32_t up = int32_t(U32{0xFFBF40}) + 0x1000;
     if (uint32_t(up) >= 0x30000) up = 0x30000;
@@ -241,7 +301,11 @@ uint32_t ShapeSize() {
 // aligned. Returns true when the view was scrolled directly.
 bool MovePlacementCursor() {
     U8{0xFFE41E} &= 0xDF;
-    uint16_t pad = uint16_t(ReadPads());
+    uint16_t pad = uint16_t(ReadPads() & ~host::mouse_pad());
+    if (host::mouse().active && !(pad & 0xF)) {
+        uint32_t sz = ShapeSize();
+        return MouseCursor(pad, int16_t(rd16(sz)), int16_t(rd16(sz + 2)), true);
+    }
     uint16_t dir = pad;
     for (;;) {
         uint16_t flags = dir;
@@ -422,6 +486,7 @@ void PlacementCursorHook() {
         for (int i = 0; i < 0x40; i++) display::vram_w16(uint16_t(0x57C0 + i * 2), rd16(src + i * 2u));
     }
     CountTicks();
+    PollMouse(true);
     if (!Shake() && !U8{0xFFBF7F} && !MovePlacementCursor()) {
         uint32_t sz = ShapeSize();
         int16_t w = int16_t(rd16(sz)), h = int16_t(rd16(sz + 2));
@@ -447,6 +512,7 @@ void FreeCursorHook() {
         for (int i = 0; i < 0x40; i++) display::vram_w16(uint16_t(0x57C0 + i * 2), rd16(src + i * 2u));
     }
     CountTicks();
+    PollMouse(false);
     if (!Shake()) {
         if (U8{0xFFBF7F}) {
             Finish();

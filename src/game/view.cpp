@@ -203,6 +203,7 @@ void SetMapBounds(uint32_t rect) {
     InitView(0xFFE3EC, rect);
     wr32(0xFFE3EC + 0x18, 0xFF7D9C);
     wr8(0xFFE3EC + 0x18, 0);
+    NarrowViewLimits();
     FlushDma();
     U16{0xFFE3BA} = U16{0xFFE3EE};
     U16{0xFFE3BC} = U16{0xFFE3EE};

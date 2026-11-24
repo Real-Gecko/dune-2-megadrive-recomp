@@ -7,6 +7,7 @@
 #include "ymfm/ymfm_opn.h"
 
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 class Gems {
@@ -28,6 +29,9 @@ public:
     // The bank's sound effects: one-track sequences that play notes and leave
     // the master attenuation alone.
     std::vector<uint8_t> effects() const;
+    // When set, sample notes go here (ROM address, bytes, YM2612 samples a
+    // byte) instead of the DAC, so they can overlap.
+    std::function<void(uint32_t, uint16_t, int)> on_sample;
     // Command 20: the attenuation added to every FM note.
     uint8_t master_atten() const { return masteratn_; }
     void master_atten(uint8_t a) { masteratn_ = a; }

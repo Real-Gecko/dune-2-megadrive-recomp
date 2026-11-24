@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags: ["*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake g++ make curl zip mingw-w64 libsdl3-dev
+
+      - name: Build Linux
+        run: make
+
+      - name: Build Windows
+        run: make win
+
+      - name: Pack
+        run: |
+          win=dune2-$GITHUB_REF_NAME-Windows-x64
+          linux=dune2-$GITHUB_REF_NAME-Linux-x64
+          mkdir $win $linux
+          cp -r dune2.exe SDL3.dll README.md recomplauncher.json $win
+          cp -r dune2 README.md recomplauncher.json $linux
+          zip -r $win.zip $win
+          tar czf $linux.tar.gz $linux
+          echo "ASSETS=$win.zip $linux.tar.gz" >> $GITHUB_ENV
+
+      # The release notes (shown by RecompLauncher) are the tag's CHANGELOG.md section.
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          awk -v v="$GITHUB_REF_NAME" '/^## /{f = $2 == v; next} f' CHANGELOG.md > notes.md
+          gh release create "$GITHUB_REF_NAME" $ASSETS --title "$GITHUB_REF_NAME" --notes-file notes.md

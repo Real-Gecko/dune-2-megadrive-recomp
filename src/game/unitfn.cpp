@@ -383,6 +383,7 @@ uint16_t UnitPickUp(uint32_t) {
         }
         wr8(u + 3, uint8_t(rd16(v)));
         U8{u + 4} |= 1;
+        if (rd8(best + 2) == 0xD) LeaveGroupsForRepair(v); // port: carried off for repair
         CancelOrder(0, v);
         LiftUnit(v);
         LinkTargets(MakeTarget(rd16(u), 1), MakeTarget(rd16(best), 2));

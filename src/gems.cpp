@@ -646,6 +646,16 @@ void Gems::noteonpsg(Ccb& c, bool noise) {
 }
 
 void Gems::noteondig(Ccb& c) {
+    if (on_sample) {
+        uint8_t s = uint8_t(non_note_ - 48);
+        if (non_note_ < 48) s = uint8_t(s + 96);
+        uint32_t h = dtbl_ + s * 12u;
+        uint8_t n = uint8_t(-(chpat_[1] != 4 ? chpat_[1] : rom(h) & 0x0F));
+        int period = 1024 - ((uint8_t(int8_t(n) >> 2) << 2) | (n & 3)); // as timer A
+        uint32_t ptr = uint32_t(rom(h + 1) | rom(h + 2) << 8 | rom(h + 3) << 16) + rom16(h + 4);
+        if (rom16(h + 6)) on_sample((dtbl_ + ptr) & 0xFFFFFF, rom16(h + 6), period);
+        return;
+    }
     Voice* v;
     uint8_t f = allocspec(c, &fmv_[4], v);
     if (f == 0xFF) return;

@@ -31,6 +31,7 @@ void Reset() {
         InitSpritePool(0xFFE6A8, 0xFFF3A8);
         wr8(0xFFE000, 0); // 0x282A: not a PAL console
         md::int_mask = 0;
+        host::clear_press();
         BootLogo();
         GameMain();
     }

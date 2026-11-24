@@ -365,7 +365,7 @@ uint16_t StructureBuild(uint32_t s, int16_t item) {
             if (int8_t(rd8(e + 2)) <= 0) continue;
             uint16_t ut = rd16(e);
             U16{0xFFC148} += 1;
-            uint32_t u = CreateUnitAt(0xFFFF, ut, uint16_t(house), 0xFFFF, 0);
+            uint32_t u = CreateUnitAt(0xFFFF, ut, uint16_t(house), 0xFFFFFFFF, 0);
             U16{0xFFC148} -= 1;
             if (u) {
                 wr16(s + 0x5C, 1);
@@ -395,7 +395,7 @@ uint16_t StructureBuild(uint32_t s, int16_t item) {
     uint32_t it, made;
     if (type != 8) {
         it = rd32(0x6C5BC + uint16_t(item) * 4u);
-        made = CreateUnitAt(0xFFFF, uint16_t(item), uint16_t(house), 0xFFFF, 0);
+        made = CreateUnitAt(0xFFFF, uint16_t(item), uint16_t(house), 0xFFFFFFFF, 0);
     } else {
         it = SInfo(uint8_t(item));
         made = CreateStructure(0xFFFF, uint16_t(item), uint16_t(house), 0xFFFF);
@@ -674,6 +674,7 @@ void ClearFlagCell(uint32_t s) {
 
 // 0xBA56: a structure record freed.
 void FreeStructure(uint32_t s) {
+    LeaveGroups(s); // port: a new structure may get the record
     ScriptReset(s + 0x16, 0xFFC1C8);
     U8{rd32(0x4A9FA + HouseOf(s) * 4) + int16_t(int8_t(rd8(s + 2)))} -= 1;
     ClearFlagCell(s);
@@ -798,6 +799,7 @@ uint16_t DamageStructure(uint32_t s, uint16_t damage, uint16_t) {
         U16{0xFFC05E} += uint16_t(pts);
     }
     if (house == int16_t(U16{0xFFC274}) && s == U32{0xFFC578}) U32{0xFFC578} = 0;
+    NoteEvent(rd32(s + 0xA)); // port: Space goes there
     StructureDestroyed(s);
     if (house == int16_t(U16{0xFFC274})) {
         uint8_t h = rd8(s + 8);
@@ -834,6 +836,7 @@ void EnterStructure(uint32_t u, uint32_t s) {
     if (Allied(house_of(s), house_of(u))) {
         SetStructureState(s, (rd16(si + 0xC) & 0x10) ? 2 : 1);
         if (rd8(s + 2) == 0xD) {
+            if (house_of(u) == U16{0xFFC274}) LeaveGroupsForRepair(u); // port
             uint32_t ui = rd32(0x6C5BC + int16_t(int8_t(rd8(u + 2))) * 4);
             uint16_t max = rd16(ui + 0x10);
             uint16_t cost = ScaleHealth(uint16_t(rd16(ui + 0x18) << 6), PartOf(max, uint16_t(max - rd16(u + 0x12))));

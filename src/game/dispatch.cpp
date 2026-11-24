@@ -2,13 +2,13 @@
 #include "game.hpp"
 
 #include <cstdio>
-#include <cstdlib>
 
 namespace game {
 
 void untranslated(uint32_t addr) {
-    std::fprintf(stderr, "untranslated: %06X (frame %u)\n", addr, host::frame_count);
-    std::exit(2);
+    char msg[64];
+    std::snprintf(msg, sizeof msg, "untranslated: %06X (frame %u)", addr, host::frame_count);
+    host::fatal(msg);
 }
 
 uint32_t call(uint32_t addr) {

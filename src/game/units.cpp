@@ -332,6 +332,7 @@ void UnitSeenBy(uint32_t u, int16_t house) {
     if (house == int16_t(player_house) && U16{0xFFC264} && !Allied(uint16_t(owner), player_house) &&
         rd8(u + 2) != 0x19) {
         uint32_t p = U32{0xFFC278};
+        NoteEvent(rd32(u + 0xA)); // port: Space goes there
         if (!rd16(p + 0x28)) PlayVoice(1);
         wr16(p + 0x28, 8);
         if (uint32_t t = TeamGet(uint16_t(int8_t(rd8(u + 0x75))))) wr16(t + 0x32, 1);
@@ -456,6 +457,7 @@ void FreeUnitBlip(uint16_t b) {
 // 0x43504: a unit record freed.
 void FreeUnit(uint32_t u) {
     if (!u) return;
+    LeaveGroups(u); // port: a new unit may get the record
     uint32_t info = UnitInfo(rd8(u + 2));
     ScriptReset(u + 0x16, 0xFFC1B0);
     ForgetObject(u);

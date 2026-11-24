@@ -11,6 +11,8 @@ namespace audio {
 // `wav_path` (headless runs) when it is not empty.
 void init(bool device, const std::string& wav_path);
 void shutdown();
+// The device stopped (on) or playing again.
+void pause(bool on);
 // Headless recording: the sound of one 1/60 s frame.
 void frame();
 

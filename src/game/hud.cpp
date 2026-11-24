@@ -86,7 +86,7 @@ void UpdateHouse(uint16_t house, uint16_t mode) {
         d = int16_t(d >> 2);
         if (!d) d = 1;
         if (d > 0x80) d = 0x80;
-        if (d < -0x80) d = 0x80;
+        if (d < -0x80) d = -0x80; // moveq #$80 sign-extends
         speed = uint32_t(int32_t(speed) + d);
     } else {
         speed = 0;

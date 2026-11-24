@@ -1,6 +1,7 @@
 #include "audio.hpp"
 
 #include "gems.hpp"
+#include "md/mem.hpp"
 #include "psg.hpp"
 
 #include <SDL3/SDL.h>
@@ -36,6 +37,30 @@ std::FILE* wav = nullptr;
 uint32_t wav_frames = 0, wav_phase = 0;
 std::vector<float> buf;
 
+// The effects' samples, mixed so they overlap (the console's one DAC
+// channel cut a playing sample off).
+struct Sample {
+    uint32_t addr, len;
+    int period, t = 0;
+};
+std::vector<Sample> samples;
+
+float mix_samples() {
+    float v = 0;
+    for (size_t i = 0; i < samples.size();) {
+        Sample& s = samples[i];
+        uint32_t k = uint32_t(s.t++ / s.period);
+        if (k >= s.len) {
+            samples.erase(samples.begin() + long(i));
+            continue;
+        }
+        int d = int8_t(md::rom[s.addr + k] ^ 0x80) * 2; // as ymfm's DAC
+        v += float(d < 0 ? d - 3 : d + 4) / 780.0f;
+        i++;
+    }
+    return v;
+}
+
 std::unique_ptr<Core> make_core() {
     auto c = std::make_unique<Core>();
     c->fm.reset();
@@ -64,6 +89,9 @@ void render(float* out, int frames) {
         float m[2], s[2];
         render(*music, m);
         render(*sfx, s);
+        float d = mix_samples();
+        s[0] += d;
+        s[1] += d;
         out[2 * i] = std::clamp(m[0] + s[0], -1.0f, 1.0f);
         out[2 * i + 1] = std::clamp(m[1] + s[1], -1.0f, 1.0f);
     }
@@ -103,6 +131,7 @@ void wav_header() {
 void init(bool device, const std::string& wav_path) {
     music = make_core();
     sfx = make_core();
+    sfx->gems.on_sample = [](uint32_t addr, uint16_t len, int period) { samples.push_back({addr, len, period}); };
     mutex = SDL_CreateMutex();
     if (!wav_path.empty()) {
         wav = std::fopen(wav_path.c_str(), "wb");
@@ -117,6 +146,12 @@ void init(bool device, const std::string& wav_path) {
         return;
     }
     SDL_ResumeAudioStreamDevice(stream);
+}
+
+void pause(bool on) {
+    if (!stream) return;
+    if (on) SDL_PauseAudioStreamDevice(stream);
+    else SDL_ResumeAudioStreamDevice(stream);
 }
 
 void shutdown() {
@@ -183,6 +218,7 @@ void stop_all() {
     Lock l;
     music->gems.stop_all();
     sfx->gems.stop_all();
+    samples.clear();
 }
 
 void mute(uint8_t seq, uint8_t ch, uint8_t on) {

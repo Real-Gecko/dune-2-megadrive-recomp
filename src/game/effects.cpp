@@ -327,6 +327,7 @@ void SpawnEffect(uint16_t kind, uint32_t pos, uint16_t damage, uint16_t src) {
         if (uint32_t st = StructureAt(cell)) {
             uint32_t si = rd32(0x6B954 + int16_t(int8_t(rd8(st + 2))) * 4);
             if (kind == 2 && (int16_t(rd16(si + 0x10)) >> 1) > int16_t(rd16(st + 0x12))) kind = 0xF;
+            if (int8_t(rd8(st + 8)) == int16_t(U16{0xFFC274})) NoteEvent(rd32(st + 0xA)); // port: Space goes there
             HouseAttacked(uint16_t(int16_t(int8_t(rd8(st + 8)))));
             DamageStructure(st, damage, 0);
         }

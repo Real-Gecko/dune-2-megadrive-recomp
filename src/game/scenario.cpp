@@ -219,7 +219,7 @@ uint32_t ScenarioStructure(uint32_t p, uint16_t key) {
 uint32_t ScenarioReinforcement(uint32_t p, uint16_t index) {
     uint16_t a = rd16(p), b = rd16(p + 2), c = rd16(p + 4), d = rd16(p + 6);
     p += 8;
-    uint32_t u = CreateUnitAt(0xFFFF, b, a, 0xFFFF, 0);
+    uint32_t u = CreateUnitAt(0xFFFF, b, a, 0xFFFFFFFF, 0);
     if (!u) return p;
     UpdateUnitSprite(u);
     uint32_t r = 0xFFC0A2 + index * 10u;

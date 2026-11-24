@@ -27,19 +27,6 @@ uint32_t IterNext(uint32_t it, uint32_t list, uint16_t count) {
     return 0;
 }
 
-// 0x20658, 0x20668: walks the structures of a blip list (0x20650: 0
-// allied, 1 enemy).
-uint32_t FirstBlipStructure(uint16_t which) {
-    U32{0xFFDBD4} = rd32(rd32(0x20650 + which * 4u));
-    return 0;
-}
-uint32_t NextBlipStructure() {
-    uint32_t b = U32{0xFFDBD4};
-    if (!b) return 0;
-    U32{0xFFDBD4} = Node(rd16(b + 4));
-    return rd32(0x4A71E + rd16(b) * 4u);
-}
-
 // 0xB794, 0x43196, 0x2DDEC: the lists rebuilt from the used slots; house
 // unit counts recounted.
 void RebuildStructureList() {
@@ -84,16 +71,6 @@ void RevealUnit(uint32_t u) {
 }
 
 namespace {
-
-// 0xFA2C: the structure types a house has (bit 4 implies bit 3).
-uint32_t StructureTypes(uint16_t house) {
-    uint32_t m = 0;
-    FirstBlipStructure(house == player_house ? 0 : 1);
-    for (uint32_t s = NextBlipStructure(); s; s = NextBlipStructure())
-        if (!(rd16(s + 4) & 4)) m |= 1u << int8_t(rd8(s + 2));
-    if (m & 0x10) m |= 8;
-    return m;
-}
 
 // 32-bit value times a signed byte, as the compiler's mulu/muls sequence.
 uint32_t MulByte(uint32_t v, int8_t b) { return uint32_t(int32_t(v) * b); }
@@ -512,7 +489,7 @@ void RunMission() {
         if (!rd32(h + 0x22)) wr32(h + 0x22, rd32(s + 0xA));
     }
     for (uint32_t h = FirstHouse(0); h; h = NextHouse(0)) {
-        wr32(h + 0xE, StructureTypes(rd16(h)));
+        wr32(h + 0xE, OwnedTypes(rd16(h)));
         UpdateStorage(rd16(h));
         UpdatePower(int16_t(rd16(h)));
     }
@@ -523,6 +500,7 @@ void RunMission() {
     if (U16{0xFFC170} == 0xFFFF) StructureAt(U16{0xFFC248});
     U16{0xFFC348} = 0;
     U32{0xFFC25C} = 0;
+    ResetSelection();
     U32{0xFFC578} = 0;
     U32{0xFFC260} = 0;
     U32{0xFFC150} = U32{0xFFC598} + 0x46;

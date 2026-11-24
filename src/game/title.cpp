@@ -2,6 +2,9 @@
 // START GAME / OPTIONS / TUTORIAL menu (0x17A20-0x17F2E).
 #include "game.hpp"
 
+#include <algorithm>
+#include <cstdio>
+
 namespace game {
 
 // 0x17B6C, 0x17BA4: horizontal scroll of plane B / plane A (whole screen).
@@ -22,6 +25,7 @@ constexpr U8 scroll_running{0xFFD70A};
 constexpr U8 scroll_repeat{0xFFD70B};
 constexpr U8 music_on{0xFFDC50};
 constexpr U8 sfx_on{0xFFDC51};
+constexpr U16 player_house{0xFFC274};
 
 U16 cursor_node{kCursor + 4};
 
@@ -53,7 +57,7 @@ void StopVBlankHook() {
 // 0x17D1A: 2 when a button was pressed, 1 once the scroll stopped, else 0.
 uint16_t TitleScrollState() {
     WaitVBlank();
-    if (ReadPads() & 0xF0) return 2;
+    if ((ReadPads() & 0xF0) || host::press_pending()) return 2;
     return scroll_pos <= scroll_target ? 1 : 0;
 }
 
@@ -70,6 +74,7 @@ uint16_t ShowSpritesWait() {
     for (int i = 0; i < 3; i++) {
         WaitVBlank();
         if (uint16_t b = ReadPads() & 0xF0) return b;
+        if (host::press_pending()) return 1;
     }
     SpriteTableHook();
     return 0;
@@ -151,14 +156,18 @@ void ShowMenuCursor() {
     SpriteTableHook();
 }
 
+// Port: 4 with the LOAD GAME item (saves exist), else 3.
+uint16_t menu_rows = 3;
+
 // 0x17A9E: Up/Down move the cursor over the three items; a button returns
-// the item ('A' 'B' 'C'), else 0.
+// the item ('A' 'B' 'C', port: 'L' LOAD GAME), else 0.
 uint16_t MenuCursorKey(uint16_t key) {
     U16 y{kCursor + 2};
+    uint16_t last = uint16_t(0xA0 + (menu_rows - 1) * 8);
     uint8_t k = uint8_t(key);
     if (k == 'U' || k == 'D') {
-        if (k == 'U') y = int16_t(y) > 0xA0 ? uint16_t(y - 8) : uint16_t(0xB0);
-        else y = int16_t(y) < 0xB0 ? uint16_t(y + 8) : uint16_t(0xA0);
+        if (k == 'U') y = int16_t(y) > 0xA0 ? uint16_t(y - 8) : last;
+        else y = int16_t(y) < int16_t(last) ? uint16_t(y + 8) : uint16_t(0xA0);
         PlaySfx(0xB);
         return 0;
     }
@@ -166,8 +175,103 @@ uint16_t MenuCursorKey(uint16_t key) {
         if (y == 0xA0) return 'A';
         if (y == 0xA8) return 'B';
         if (y == 0xB0) return 'C';
+        if (y == 0xB8) return 'L';
     }
     return 0;
+}
+
+// Port: frames waited; true when a key, mouse or pad button skipped the
+// intro.
+bool IntroWait(uint16_t n) {
+    while (n--) {
+        WaitVBlank();
+        if (host::press_pending()) return true;
+    }
+    return false;
+}
+
+// Port: the menu row under the mouse (0 to rows - 1), else -1.
+int MouseRow(int rows) {
+    const host::Mouse& m = host::mouse();
+    if (!m.inside || m.x < 112 || m.x > 296 || m.y < 160 || m.y >= 160 + rows * 8) return -1;
+    return (m.y - 160) / 8;
+}
+
+// Port: a text line (padded to 22 characters) on the title's menu row.
+void PrintRow(int row, const char* text) {
+    md::Frame f(24);
+    int i = 0;
+    for (; text[i] && i < 22; i++) wr8(f.base + i, uint8_t(text[i]));
+    for (; i < 22; i++) wr8(f.base + i, ' ');
+    wr8(f.base + 22, 0);
+    PrintPlaneA(f.base, uint16_t(0xA50 + row * 0x80), 0, 3);
+}
+
+void PrintMenu() {
+    PrintRow(0, "START GAME");
+    PrintRow(1, "OPTIONS");
+    PrintRow(2, "TUTORIAL");
+    PrintRow(3, menu_rows > 3 ? "LOAD GAME" : "");
+    for (int r = 4; r < 7; r++) PrintRow(r, "");
+}
+
+// Port: the saved missions, seven rows at a time; Up/Down (or the mouse)
+// pick one, A (Enter) or a click loads it as its password would, B (Esc,
+// a right click) goes back. True when a game was loaded.
+bool LoadMenu() {
+    static const char* const kHouse[3] = {"HARKONNEN", "ATREIDES", "ORDOS"};
+    std::vector<Save> saves = ReadSaves();
+    int n = int(saves.size()), rows = std::min(n, 7), at = 0, top = 0;
+    auto draw = [&]() {
+        for (int r = 0; r < 7; r++) {
+            char line[32] = "";
+            if (r < rows) {
+                const Save& s = saves[size_t(top + r)];
+                std::snprintf(line, sizeof line, "%-10s MISSION %d", kHouse[s.house], s.scenario);
+            }
+            PrintRow(r, line);
+        }
+    };
+    draw();
+    // No held button repeats here: the A (Enter) that opened the list
+    // must not pick from it or close it.
+    uint8_t saved_mask = pad_repeat_mask;
+    pad_repeat_mask = 0xFF;
+    for (;;) {
+        uint16_t key = GetKey();
+        if (host::take_escape()) key = 'B';
+        bool click = key == 'A' && (host::mouse_pad() & 0x40);
+        int row = MouseRow(rows);
+        int to = at;
+        if (row >= 0 && (host::mouse().active || click)) to = top + row;
+        if (key == 'U' && at > 0) to = at - 1;
+        if (key == 'D' && at < n - 1) to = at + 1;
+        if (to != at) {
+            at = to;
+            PlaySfx(0xB);
+            if (at < top) top = at;
+            if (at >= top + rows) top = at - rows + 1;
+            draw();
+        }
+        wr16(kCursor + 2, uint16_t(0xA0 + (at - top) * 8));
+        ShowMenuCursor();
+        WaitVBlank();
+        if ((key == 'A' || key == 'C' || key == 'S') && !(click && row < 0)) {
+            pad_repeat_mask = saved_mask;
+            player_house = saves[size_t(at)].house;
+            U16{0xFFC04C} = saves[size_t(at)].scenario;
+            U16{0xFFC050} = uint16_t(saves[size_t(at)].scenario - 1);
+            U16{0xFFC024} = 1; // as a password: the game loaded
+            return true;
+        }
+        if (key == 'B') {
+            pad_repeat_mask = saved_mask;
+            PlaySfx(0xB);
+            PrintMenu();
+            wr16(kCursor + 2, 0xB8);
+            return false;
+        }
+    }
 }
 
 // Brightens colour (3, 0xD) to white, pulsing (3, 0xE) meanwhile.
@@ -253,24 +357,33 @@ uint16_t TitleScreen(uint16_t intro) {
     if (intro) {
         FadeIn(pal);
         StartTitleScroll(0xFD40);
-        WaitFrames(200);
+        if (IntroWait(200)) {
+            result = 0;
+            goto done;
+        }
         SetPlaneAScroll(0);
         LoadScreen(13);
         FadeToward(0xA6E18, 0x10, 0x30);
-        WaitFrames(300);
+        if (IntroWait(300)) {
+            result = 0;
+            goto done;
+        }
         FadeToward(0xFFC28C, 0x10, 0x30);
         ClearPlaneA();
         LoadFont();
         PrintPlaneA(0x173F4, 0x10, 0x1C, 3); // PRESENT
         PulseIn();
         for (int i = 0; i < 200; i++)
-            if (ReadButtons()) {
+            if (ReadButtons() || host::press_pending()) {
                 result = 0;
                 goto done;
             }
         while (!FadeColor(3, 0xD, 0)) {
             FadeColor(3, 0xE, 0);
-            WaitFrames(3);
+            if (IntroWait(3)) {
+                result = 0;
+                goto done;
+            }
         }
         ClearPlaneA();
         scroll_repeat = 0;
@@ -297,7 +410,7 @@ uint16_t TitleScreen(uint16_t intro) {
             }
             WriteCram(1, 0, 0x30, 0xFFC28C);
             for (int i = 0; i < 180; i++)
-                if (ReadButtons()) {
+                if (ReadButtons() || host::press_pending()) {
                     result = 0;
                     break;
                 }
@@ -324,7 +437,12 @@ done:
     PrintPlaneA(0x173FC, 0xA50, 0, 3); // START GAME
     PrintPlaneA(0x17407, 0xAD0, 0, 3); // OPTIONS
     PrintPlaneA(0x1740F, 0xB50, 0, 3); // TUTORIAL
+    menu_rows = ReadSaves().empty() ? 3 : 4;
+    if (menu_rows > 3) PrintRow(3, "LOAD GAME");
     PulseIn();
+    // Port: the press that skipped the intro is not taken as a menu key.
+    if (host::press_pending()) ReadPads();
+    host::clear_press();
     CreateMenuCursor();
     SetColor(2, 0xD, 0x666);
     SetColor(2, 0xF, 0x666);
@@ -332,6 +450,11 @@ done:
     uint16_t blink = 0, idle = 900;
     while (!key) {
         key = GetKey();
+        // Port: the mouse points at an item; a click picks the one under it.
+        bool click = key == 'A' && (host::mouse_pad() & 0x40);
+        int row = MouseRow(menu_rows);
+        if (row >= 0 && (host::mouse().active || click)) wr16(kCursor + 2, uint16_t(0xA0 + row * 8));
+        if (click && row < 0) key = 0;
         if (key == 'D' || key == 'U') idle = 900;
         if (int16_t(--idle) <= 0) key = 'D';
         else key = MenuCursorKey(key);
@@ -339,6 +462,11 @@ done:
         case 'A': result = 0; break;
         case 'B': result = 1; break;
         case 'C': result = 2; break;
+        case 'L':
+            if (LoadMenu()) result = 0;
+            else key = 0;
+            idle = 900;
+            break;
         case 'D': result = 3; break;
         default: key = 0;
         }

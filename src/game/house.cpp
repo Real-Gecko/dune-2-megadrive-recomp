@@ -123,6 +123,7 @@ uint16_t ChooseHouse() {
 // out-of-campaign path plays the finale and resets.
 void StartScenario(uint16_t house, uint16_t campaign) {
     if (campaign <= 9) {
+        SaveMission(house, campaign); // port: the mission reached
         Briefing(house, campaign);
         PlayMission(house, campaign);
     } else {

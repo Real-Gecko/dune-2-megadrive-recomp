@@ -397,6 +397,34 @@ void MoveMenuCursor() {
     QueueDma(2, 0xFF0000, 0x7C0000C0);
 }
 
+// Port: a mouse click on another slot than the cursor's moves the cursor
+// there (the item shown, the A dropped); true when it did or the click
+// missed the grid (slots of 32 x 24 pixels from 0x4A152).
+bool ClickMenuSlot() {
+    if (!(host::mouse_pad() & 0x40)) return false;
+    const host::Mouse& m = host::mouse();
+    int c = (m.x - 32) >> 5, r = (m.y - 48) / 24;
+    if (m.x < 32 || m.y < 48 || c > 2 || r > 5) return true;
+    uint16_t slot = uint16_t(r * 3 + c);
+    uint8_t item = rd8(kGrid + slot);
+    if (item == 0x80) return true;
+    if (c == U16{0xFFBF8A} && r == U16{0xFFBF8C}) return false;
+    U16{0xFFBF8A} = uint16_t(c);
+    U16{0xFFBF8C} = uint16_t(r);
+    wr8(0xFFBFA1, item);
+    int16_t shown = int8_t(item);
+    if (item == rd8(0xFFC618)) shown = int8_t(rd8(0xFFBFA0));
+    ShowItem(shown, 1);
+    uint32_t pos = rd32(Node(U16{0xFFBF86}));
+    wr16(pos, rd16(0x4A152 + slot * 8u));
+    wr16(pos + 2, rd16(0x4A154 + slot * 8u));
+    uint32_t n = Node(U16{0xFFBFBA});
+    U8{n + 7} |= 0x80;
+    if (U32{0xFFBF80} == rd32(0x4A15A)) U8{n + 7} &= 0x7F;
+    PlaySfx(0x19);
+    return true;
+}
+
 } // namespace
 
 // 0x287DC: the menu until A picks an item or B/C leave; the choice (an
@@ -421,8 +449,12 @@ int16_t BuildMenu() {
     int16_t choice = 0;
     for (;;) {
         GetKey();
+        bool esc = host::take_escape();
+        if (esc) wr8(0xFFBF2B, 'B');
         uint8_t key = rd8(0xFFBF2B);
-        if (key == 'A') {
+        if (key == 'A' && ClickMenuSlot()) {
+            wr8(0xFFBF2B, 0);
+        } else if (key == 'A') {
             choice = CurrentItem();
             bool bad = (choice == -4 && !rd8(0xFFBFB4)) || (choice == -5 && !rd8(0xFFBFB5));
             if (!bad && rd8(U32{0xFFC578} + 2) == 5 && (choice == 0 || choice == 1) && !U16{0xFFC728}) bad = true;
@@ -430,6 +462,8 @@ int16_t BuildMenu() {
                 PlaySoundEffect(0x2F);
                 wr8(0xFFBF2B, 0);
             }
+        } else if (key == 'B' && (esc || (host::mouse_pad() & 0x10))) {
+            choice = -1; // port: a right click or Esc leaves as the done button
         } else if (key == 'B' || key == 'C') {
             wr8(0xFFBF2B, 0);
         } else {
@@ -751,6 +785,7 @@ void StarportMenu(uint32_t s) {
     U16{0xFFC574} += uint16_t(t0 - FrameCounter());
     for (;;) {
         GetKey();
+        if (host::take_escape()) break; // port: Esc leaves as DONE
         uint8_t key = rd8(0xFFBF2B);
         if (key == 'A') {
             uint16_t item = rd8(kPortGrid + U16{0xFFBFCA} * 3u + U16{0xFFBFC8});
